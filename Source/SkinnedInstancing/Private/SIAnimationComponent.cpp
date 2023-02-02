@@ -35,7 +35,7 @@ void USIAnimationComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	Super::EndPlay(EndPlayReason);
 }
 
-void USIAnimationComponent::CreateRenderState_Concurrent()
+void USIAnimationComponent::CreateRenderState_Concurrent(FRegisterComponentContext* Context)
 {
 	if (Skeleton && AnimSequences.Num() > 0 && AnimSequences[0])
 	{
@@ -46,7 +46,7 @@ void USIAnimationComponent::CreateRenderState_Concurrent()
 		}
 	}
 
-	Super::CreateRenderState_Concurrent();
+	Super::CreateRenderState_Concurrent(Context);
 }
 
 void USIAnimationComponent::DestroyRenderState_Concurrent()
@@ -70,8 +70,11 @@ namespace
 	{
 		FCompactPose OutPose;
 		FBlendedCurve OutCurve;
+		FStackCustomAttributes AdditiveAttributes;
 		OutPose.SetBoneContainer(BoneContainer);
 		OutPose.ResetToRefPose();
+		FAnimationPoseData AnimationPoseData(OutPose, OutCurve, AdditiveAttributes);
+		
 
 		int NumBones = BoneContainer->GetReferenceSkeleton().GetRawBoneNum();
 		int NumFrames = AnimSequence->GetNumberOfFrames();
@@ -82,13 +85,13 @@ namespace
 		for (int FrameIndex = 0; FrameIndex < NumFrames; FrameIndex++)
 		{
 			float Time = FrameIndex * Interval;
-			AnimSequence->GetBonePose(/*out*/ OutPose, /*out*/OutCurve, FAnimExtractContext(Time));
+			AnimSequence->GetBonePose(AnimationPoseData, FAnimExtractContext(Time));
 
 			TArray<FTransform> ComponentSpaceTransforms;
 
 			ComponentSpaceTransforms.AddUninitialized(NumBones);
 
-			auto& LocalTransform = OutPose.GetBones();
+			auto& LocalTransform = AnimationPoseData.GetPose().GetBones();
 
 			check(LocalTransform.Num() == ComponentSpaceTransforms.Num());
 

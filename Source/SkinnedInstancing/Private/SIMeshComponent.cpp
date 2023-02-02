@@ -1,5 +1,5 @@
 #include "SIMeshComponent.h"
-#include "Classes/Materials/Material.h"
+#include "Materials/Material.h"
 #include "PrimitiveSceneProxy.h"
 #include "SkeletalMeshTypes.h"
 #include "Rendering/SkeletalMeshRenderData.h"
@@ -7,6 +7,7 @@
 #include "BonePose.h"
 #include "SIAnimationData.h"
 #include "MeshDrawShaderBindings.h"
+#include "MeshMaterialShader.h"
 
 #pragma optimize( "", off )
 namespace
@@ -55,6 +56,7 @@ namespace
 
 	class FGPUSkinVertexFactory : public FVertexFactory
 	{
+		DECLARE_VERTEX_FACTORY_TYPE(FGPUSkinVertexFactory)
 	public:
 		FGPUSkinVertexFactory(ERHIFeatureLevel::Type InFeatureLevel, uint32 InNumVertices)
 			: FVertexFactory(InFeatureLevel)
@@ -72,8 +74,6 @@ namespace
 			HasExtraBoneInfluences = false,
 		};
 	public:
-		static FVertexFactoryType StaticType;
-		virtual FVertexFactoryType* GetType() const override;
 
 		struct FDataType : public FStaticMeshDataType
 		{
@@ -176,9 +176,9 @@ namespace
 				return true;
 			}
 
-			void UpdateBoneData(const FSIAnimationData* BoneData)
+			void UpdateBoneData(const FSIAnimationData* InBoneData)
 			{
-				this->BoneData = BoneData;
+				this->BoneData = InBoneData;
 			}
 
 			bool UpdateInstanceData(const TArray<FSIMeshInstanceData>& InstanceData, int MaxNumInstances)
@@ -268,12 +268,11 @@ namespace
 		}
 
 		static FVertexFactoryShaderParameters* ConstructShaderParameters(EShaderFrequency ShaderFrequency);
-		static bool ShouldCompilePermutation(EShaderPlatform Platform, const class FMaterial* Material, const FShaderType* ShaderType);
-		static void ModifyCompilationEnvironment(const FVertexFactoryType* Type, EShaderPlatform Platform, const FMaterial* Material, FShaderCompilerEnvironment& OutEnvironment);
+		static bool ShouldCompilePermutation(const FVertexFactoryShaderPermutationParameters& Parameters);
+		static void ModifyCompilationEnvironment(const FVertexFactoryShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment);
 
 		void InitGPUSkinVertexFactoryComponents(const FVertexFactoryBuffers& VertexBuffers)
 		{
-			typedef TSkinWeightInfo<HasExtraBoneInfluences> WeightInfoType;
 
 			//position
 			VertexBuffers.StaticVertexBuffers->PositionVertexBuffer.BindPositionVertexBuffer(this, Data);
@@ -281,13 +280,16 @@ namespace
 			// tangents
 			VertexBuffers.StaticVertexBuffers->StaticMeshVertexBuffer.BindTangentVertexBuffer(this, Data);
 			VertexBuffers.StaticVertexBuffers->StaticMeshVertexBuffer.BindTexCoordVertexBuffer(this, Data);
+			const FSkinWeightDataVertexBuffer* WeightDataVertexBuffer = VertexBuffers.SkinWeightVertexBuffer->GetDataVertexBuffer();
+			const uint32 Stride = VertexBuffers.SkinWeightVertexBuffer->GetConstantInfluencesVertexStride();
+			const uint32 WeightsOffset = VertexBuffers.SkinWeightVertexBuffer->GetConstantInfluencesBoneWeightsOffset();
 
 			// bone indices
 			Data.BoneIndices = FVertexStreamComponent(
-				VertexBuffers.SkinWeightVertexBuffer, STRUCT_OFFSET(WeightInfoType, InfluenceBones), VertexBuffers.SkinWeightVertexBuffer->GetStride(), VET_UByte4);
+				WeightDataVertexBuffer, 0, Stride, VET_UByte4);
 			// bone weights
 			Data.BoneWeights = FVertexStreamComponent(
-				VertexBuffers.SkinWeightVertexBuffer, STRUCT_OFFSET(WeightInfoType, InfluenceWeights), VertexBuffers.SkinWeightVertexBuffer->GetStride(), VET_UByte4N);
+				WeightDataVertexBuffer, WeightsOffset, Stride, VET_UByte4N);
 
 			Data.ColorComponentsSRV = nullptr;
 			Data.ColorIndexMask = 0;
@@ -374,7 +376,8 @@ namespace
 	class FGPUSkinVertexFactoryShaderParameters : public FVertexFactoryShaderParameters
 	{
 	public:
-		virtual void Bind(const FShaderParameterMap& ParameterMap) override
+		DECLARE_INLINE_TYPE_LAYOUT(FGPUSkinVertexFactoryShaderParameters, NonVirtual);
+		void Bind(const FShaderParameterMap& ParameterMap)
 		{
 			BoneMap.Bind(ParameterMap, TEXT("BoneMap"));
 			RefBasesInvMatrix.Bind(ParameterMap, TEXT("RefBasesInvMatrix"));
@@ -383,67 +386,59 @@ namespace
 			InstanceAnimations.Bind(ParameterMap, TEXT("InstanceAnimations"));
 		}
 
-		virtual void Serialize(FArchive& Ar) override
-		{
-			Ar << BoneMap;
-			Ar << RefBasesInvMatrix;
-			Ar << BoneMatrices;
-			Ar << InstanceMatrices;
-			Ar << InstanceAnimations;
-		}
 
-		virtual void GetElementShaderBindings(
+		void GetElementShaderBindings(
 			const FSceneInterface* Scene,
 			const FSceneView* View,
 			const FMeshMaterialShader* Shader,
-			bool bShaderRequiresPositionOnlyStream,
+			const EVertexInputStreamType InputStreamType,
 			ERHIFeatureLevel::Type FeatureLevel,
 			const FVertexFactory* VertexFactory,
 			const FMeshBatchElement& BatchElement,
 			class FMeshDrawSingleShaderBindings& ShaderBindings,
-			FVertexInputStreamArray& VertexStreams) const override
+			FVertexInputStreamArray& VertexStreams) const
 		{
 			const FGPUSkinVertexFactory::FShaderDataType& ShaderData = ((const FGPUSkinVertexFactory*)VertexFactory)->GetShaderData();
 
 			if (BoneMap.IsBound())
 			{
-				FShaderResourceViewRHIParamRef CurrentData = ShaderData.GetBoneMapForReading().VertexBufferSRV;
+				FRHIShaderResourceView* CurrentData = ShaderData.GetBoneMapForReading().VertexBufferSRV;
 				ShaderBindings.Add(BoneMap, CurrentData);
 			}
 
 			if (RefBasesInvMatrix.IsBound())
 			{
-				FShaderResourceViewRHIParamRef CurrentData = ShaderData.GetRefBasesInvMatrixForReading().VertexBufferSRV;
+				FRHIShaderResourceView* CurrentData = ShaderData.GetRefBasesInvMatrixForReading().VertexBufferSRV;
 				ShaderBindings.Add(RefBasesInvMatrix, CurrentData);
 			}
 
 			if (BoneMatrices.IsBound())
 			{
-				FShaderResourceViewRHIParamRef CurrentData = ShaderData.GetBoneBufferForReading();
+				FRHIShaderResourceView* CurrentData = ShaderData.GetBoneBufferForReading();
 				ShaderBindings.Add(BoneMatrices, CurrentData);
 			}
 
 			if (InstanceMatrices.IsBound())
 			{
-				FShaderResourceViewRHIParamRef CurrentData = ShaderData.GetInstanceTransformBufferForReading().VertexBufferSRV;
+				FRHIShaderResourceView* CurrentData = ShaderData.GetInstanceTransformBufferForReading().VertexBufferSRV;
 				ShaderBindings.Add(InstanceMatrices, CurrentData);
 			}
 
 			if (InstanceAnimations.IsBound())
 			{
-				FShaderResourceViewRHIParamRef CurrentData = ShaderData.GetInstanceAnimationBufferForReading().VertexBufferSRV;
+				FRHIShaderResourceView* CurrentData = ShaderData.GetInstanceAnimationBufferForReading().VertexBufferSRV;
 				ShaderBindings.Add(InstanceAnimations, CurrentData);
 			}
 		}
 
-		virtual uint32 GetSize() const override { return sizeof(*this); }
+		uint32 GetSize() const { return sizeof(*this); }
 
 	private:
-		FShaderResourceParameter BoneMap;
-		FShaderResourceParameter RefBasesInvMatrix;
-		FShaderResourceParameter BoneMatrices;
-		FShaderResourceParameter InstanceMatrices;
-		FShaderResourceParameter InstanceAnimations;
+		LAYOUT_FIELD(FShaderResourceParameter, BoneMap);
+		LAYOUT_FIELD(FShaderResourceParameter, RefBasesInvMatrix);
+		LAYOUT_FIELD(FShaderResourceParameter, BoneMatrices);
+		LAYOUT_FIELD(FShaderResourceParameter, InstanceMatrices);
+		LAYOUT_FIELD(FShaderResourceParameter, InstanceAnimations);
 	};
 
 	FVertexFactoryShaderParameters* FGPUSkinVertexFactory::ConstructShaderParameters(EShaderFrequency ShaderFrequency)
@@ -451,14 +446,14 @@ namespace
 		return (ShaderFrequency == SF_Vertex) ? new FGPUSkinVertexFactoryShaderParameters() : NULL;
 	}
 
-	bool FGPUSkinVertexFactory::ShouldCompilePermutation(EShaderPlatform Platform, const class FMaterial* Material, const FShaderType* ShaderType)
+	bool FGPUSkinVertexFactory::ShouldCompilePermutation(const FVertexFactoryShaderPermutationParameters& Parameters)
 	{
-		return (Material->IsUsedWithSkeletalMesh() || Material->IsSpecialEngineMaterial());
+		return (Parameters.MaterialParameters.bIsUsedWithSkeletalMesh || Parameters.MaterialParameters.bIsSpecialEngineMaterial);
 	}
 
-	void FGPUSkinVertexFactory::ModifyCompilationEnvironment(const FVertexFactoryType* Type, EShaderPlatform Platform, const FMaterial* Material, FShaderCompilerEnvironment& OutEnvironment)
+	void FGPUSkinVertexFactory::ModifyCompilationEnvironment(const FVertexFactoryShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
 	{
-		FVertexFactory::ModifyCompilationEnvironment(Type, Platform, Material, OutEnvironment);
+		FVertexFactory::ModifyCompilationEnvironment(Parameters,OutEnvironment);
 
 		bool bLimit2BoneInfluences = (CVarSkinnedInstancingLimit2BoneInfluences.GetValueOnAnyThread() != 0);
 		OutEnvironment.SetDefine(TEXT("SKINNED_INSTANCING_LIMIT_2BONE_INFLUENCES"), (bLimit2BoneInfluences ? 1 : 0));
@@ -469,30 +464,11 @@ namespace
 		bool bDisableFrameLerp = (CVarSkinnedInstancingDisableFrameLerp.GetValueOnAnyThread() != 0);
 		OutEnvironment.SetDefine(TEXT("SKINNED_INSTANCING_DISABLE_FRAME_LERP"), (bDisableFrameLerp ? 1 : 0));
 	}
-	
-	FVertexFactoryType FGPUSkinVertexFactory::StaticType(
-		TEXT("SkinnedInstancingVertexFactory"),
-		TEXT("/Plugin/SkinnedInstancing/Private/SkinnedInstancingVertexFactory.ush"),
-		/*bool bInUsedWithMaterials =*/ true,
-		/*bool bInSupportsStaticLighting =*/ false,
-		/*bool bInSupportsDynamicLighting =*/ true,
-		/*bool bInSupportsPrecisePrevWorldPos =*/ false,
-		/*bool bInSupportsPositionOnly =*/ false,
-		/*bool bInSupportsCachingMeshDrawCommands =*/ false,
-		/*bool bInSupportsPrimitiveIdStream =*/ false,
-		FGPUSkinVertexFactory::ConstructShaderParameters,
-		FGPUSkinVertexFactory::ShouldCompilePermutation,
-		FGPUSkinVertexFactory::ModifyCompilationEnvironment,
-		FGPUSkinVertexFactory::ValidateCompiledResult,
-		FGPUSkinVertexFactory::SupportsTessellationShaders
-	);
 
-	FVertexFactoryType * FGPUSkinVertexFactory::GetType() const
-	{
-		return &StaticType;
-	}
 }
 
+IMPLEMENT_VERTEX_FACTORY_TYPE(FGPUSkinVertexFactory, "/Plugin/SkinnedInstancing/Private/SkinnedInstancingVertexFactory.ush", true, false, true, false, false);
+IMPLEMENT_VERTEX_FACTORY_PARAMETER_TYPE(FGPUSkinVertexFactory, SF_Vertex, FGPUSkinVertexFactoryShaderParameters);
 class FSIMeshObject : public FDeferredCleanupInterface
 {
 public:
@@ -973,7 +949,7 @@ FPrimitiveViewRelevance FSIMeshSceneProxy::GetViewRelevance(const FSceneView * V
 	Result.bRenderCustomDepth = ShouldRenderCustomDepth();
 	Result.bTranslucentSelfShadow = bCastVolumetricTranslucentShadow;
 	MaterialRelevance.SetPrimitiveViewRelevance(Result);
-	Result.bVelocityRelevance = IsMovable() && Result.bOpaqueRelevance && Result.bRenderInMainPass;
+	Result.bVelocityRelevance = IsMovable() && Result.bOpaque && Result.bRenderInMainPass;
 	return Result;
 }
 
@@ -1058,7 +1034,7 @@ void USIMeshComponent::OnUnregister()
 	Super::OnUnregister();
 }
 
-void USIMeshComponent::CreateRenderState_Concurrent()
+void USIMeshComponent::CreateRenderState_Concurrent(FRegisterComponentContext* Context)
 {
 	if (SkeletalMesh && AnimationComponent.IsValid())
 	{
@@ -1078,7 +1054,7 @@ void USIMeshComponent::CreateRenderState_Concurrent()
 
 	UpdateMeshObejctDynamicData();
 
-	Super::CreateRenderState_Concurrent();
+	Super::CreateRenderState_Concurrent(Context);
 }
 
 void USIMeshComponent::SendRenderDynamicData_Concurrent()

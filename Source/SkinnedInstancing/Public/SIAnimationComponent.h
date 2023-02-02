@@ -38,7 +38,7 @@ protected:
 	//~ Begin UActorComponent Interface
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
-	virtual void CreateRenderState_Concurrent() override;
+	virtual void CreateRenderState_Concurrent(FRegisterComponentContext* Context) override;
 	virtual void DestroyRenderState_Concurrent() override;
 	virtual bool RequiresGameThreadEndOfFrameRecreate() const override { return false; }
 	//~ End UActorComponent Interface

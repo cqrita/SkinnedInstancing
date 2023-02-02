@@ -2,7 +2,7 @@
 
 #include "SkinnedInstancing.h"
 #include "Misc/Paths.h"
-#include "IPluginManager.h"
+#include "Interfaces/IPluginManager.h"
 #include "ShaderCore.h"
 
 #define LOCTEXT_NAMESPACE "FSkinnedInstancingModule"

@@ -116,9 +116,9 @@ USIUnitComponent::~USIUnitComponent()
 	delete AnimtionPlayer;
 }
 
-void USIUnitComponent::CreateRenderState_Concurrent()
+void USIUnitComponent::CreateRenderState_Concurrent(FRegisterComponentContext* Context)
 {
-	Super::CreateRenderState_Concurrent();
+	Super::CreateRenderState_Concurrent(Context);
 	RecreateInstance();
 }
 

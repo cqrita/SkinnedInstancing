@@ -238,7 +238,7 @@ float3 SkinPosition( FVertexFactoryInput Input, FVertexFactoryIntermediates Inte
 
 	// Note the use of mul(Matrix,Vector), bone matrices are stored transposed
 	// for tighter packing.
-	return mul( Intermediates.BlendMatrix, Position );
+	return mul( Intermediates.BlendMatrix, Position ).xyz;
 }
 
 /** transform the tangent basis vectors */
@@ -254,8 +254,8 @@ float3x3 SkinTangents( FVertexFactoryInput Input, FVertexFactoryIntermediates In
 
 	// Note the use of mul(Matrix,Vector), bone matrices are stored transposed
 	// for tighter packing.
-	TangentToLocal[0] = mul( Intermediates.BlendMatrix, float4(LocalTangentX, 0) );
-	TangentToLocal[2] = mul( Intermediates.BlendMatrix, float4(LocalTangentZ.xyz, 0) );
+	TangentToLocal[0] = mul( Intermediates.BlendMatrix, float4(LocalTangentX, 0) ).xyz;
+	TangentToLocal[2] = mul( Intermediates.BlendMatrix, float4(LocalTangentZ.xyz, 0) ).xyz;
 
 	// derive the new binormal by getting the cross product of the normal and tangent
 	// and flip vector based on sign of tangent basis determinant
@@ -336,6 +336,16 @@ void CalcTangentToWorld(FVertexFactoryInput Input, FVertexFactoryIntermediates I
 	TangentToWorld0 = TangentToWorld[0];
 	TangentToWorld2 = float4(TangentToWorld[2], Input.TangentZ.w * Primitive.InvNonUniformScaleAndDeterminantSign.w);
 }
+
+float3 VertexFactoryGetWorldNormal(FVertexFactoryInput Input, FVertexFactoryIntermediates Intermediates)
+{
+	float3 TangentToWorld0; 
+	float4 TangentToWorld2;
+	CalcTangentToWorld(Input, Intermediates, TangentToWorld0, TangentToWorld2);
+
+	return TangentToWorld2.xyz;
+}
+
 
 FVertexFactoryInterpolantsVSToPS VertexFactoryGetInterpolantsVSToPS(FVertexFactoryInput Input, FVertexFactoryIntermediates Intermediates, FMaterialVertexParameters VertexParameters)
 {

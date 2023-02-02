@@ -23,7 +23,7 @@ struct FSIMeshInstanceData
 UCLASS(hidecategories = (Object, LOD), meta = (BlueprintSpawnableComponent), ClassGroup = Rendering)
 class SKINNEDINSTANCING_API USIMeshComponent : public UMeshComponent
 {
-	GENERATED_UCLASS_BODY()
+	GENERATED_BODY()
 	
 	//~ Override Functions
 private:
@@ -41,12 +41,12 @@ private:
 	//~ Begin USceneComponent Interface.
 	virtual FBoxSphereBounds CalcBounds(const FTransform& LocalToWorld) const override;
 	//~ Begin USceneComponent Interface.
-
+	USIMeshComponent(const FObjectInitializer& ObjectInitializer);
 protected:
 	//~ Begin UActorComponent Interface
 	virtual void OnRegister() override;
 	virtual void OnUnregister() override;
-	virtual void CreateRenderState_Concurrent() override;
+	virtual void CreateRenderState_Concurrent(FRegisterComponentContext* Context) override;
 	virtual void SendRenderDynamicData_Concurrent() override;
 	virtual void DestroyRenderState_Concurrent() override;
 	virtual bool RequiresGameThreadEndOfFrameRecreate() const override { return false; }
