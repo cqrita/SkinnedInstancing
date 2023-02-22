@@ -10,7 +10,7 @@ class SKINNEDINSTANCING_API USIUnitComponent : public USceneComponent
 	GENERATED_UCLASS_BODY()
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SkinnedInstancing")
-	TWeakObjectPtr<USIMeshComponent> MeshComponent;
+	USIMeshComponent* MeshComponent;
 
 public:
 	virtual ~USIUnitComponent();
@@ -27,6 +27,9 @@ protected:
 public:
 	UFUNCTION(BlueprintCallable, Category = "Components|SkinnedInstancing")
 	void CrossFade(int Sequence, float FadeLength, bool Loop);
+
+	UFUNCTION(BlueprintCallable, Category = "Components|SkinnedInstancing")
+	void Play(int Sequence, bool Loop);
 
 	UFUNCTION(BlueprintCallable, Category = "Components|SkinnedInstancing")
 	void SetMeshComponent(USIMeshComponent* _MeshComponent);

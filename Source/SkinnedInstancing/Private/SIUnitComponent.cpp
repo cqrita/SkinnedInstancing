@@ -138,7 +138,7 @@ void USIUnitComponent::RecreateInstance()
 {
 	RemoveInstance();
 
-	if (MeshComponent.IsValid())
+	if (MeshComponent!=nullptr)
 	{
 		InstanceId = MeshComponent->AddInstance(GetComponentTransform());
 	}
@@ -148,7 +148,7 @@ void USIUnitComponent::RemoveInstance()
 {
 	if (InstanceId > 0)
 	{
-		if (MeshComponent.IsValid())
+		if (MeshComponent!= nullptr)
 		{
 			MeshComponent->RemoveInstance(InstanceId);
 		}
@@ -158,7 +158,7 @@ void USIUnitComponent::RemoveInstance()
 
 void USIUnitComponent::CrossFade(int Sequence, float FadeLength, bool Loop)
 {
-	if (MeshComponent.IsValid())
+	if (MeshComponent != nullptr)
 	{
 		UAnimSequence* AnimSequence = MeshComponent->GetSequence(Sequence);
 		if (AnimSequence)
@@ -170,11 +170,25 @@ void USIUnitComponent::CrossFade(int Sequence, float FadeLength, bool Loop)
 	}
 }
 
+void USIUnitComponent::Play(int Sequence, bool Loop)
+{
+	if (MeshComponent != nullptr)
+	{
+		UAnimSequence* AnimSequence = MeshComponent->GetSequence(Sequence);
+		if (AnimSequence)
+		{
+			int NumFrames = AnimSequence->GetNumberOfFrames();
+			FAnimtionPlayer::Sequence Seq(Sequence, AnimSequence->SequenceLength, NumFrames);
+			AnimtionPlayer->Play(Seq,Loop);
+		}
+	}
+}
+
+
 void USIUnitComponent::SetMeshComponent(USIMeshComponent * _MeshComponent)
 {
-	MeshComponent.Reset();
+	RemoveInstance();
 	MeshComponent = _MeshComponent;
-	RecreateInstance();
 }
 
 void USIUnitComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction * ThisTickFunction)
@@ -187,7 +201,7 @@ void USIUnitComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActo
 
 	AnimtionPlayer->Tick(DeltaTime);
 
-	if (MeshComponent.IsValid() && InstanceId > 0)
+	if (MeshComponent != nullptr && InstanceId > 0)
 	{
 		FSIMeshInstanceData* Instance = MeshComponent->GetInstanceData(InstanceId);
 		check(Instance);
@@ -207,6 +221,10 @@ void USIUnitComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActo
 
 		Instance->AnimDatas[0].BlendWeight = BlendWeight;
 		Instance->AnimDatas[1].BlendWeight = 1 - BlendWeight;
+	}
+	else if(MeshComponent!= nullptr && InstanceId==0)
+	{
+		RecreateInstance();
 	}
 }
 

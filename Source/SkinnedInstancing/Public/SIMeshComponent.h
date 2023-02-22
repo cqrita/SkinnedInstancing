@@ -3,7 +3,6 @@
 #include "CoreMinimal.h"
 #include "Components/MeshComponent.h"
 #include "Engine/SkeletalMesh.h"
-#include "SIAnimationComponent.h"
 #include "SIMeshComponent.generated.h"
 
 struct FSIMeshInstanceData
@@ -21,7 +20,7 @@ struct FSIMeshInstanceData
 };
 
 UCLASS(hidecategories = (Object, LOD), meta = (BlueprintSpawnableComponent), ClassGroup = Rendering)
-class SKINNEDINSTANCING_API USIMeshComponent : public UMeshComponent
+class SKINNEDINSTANCING_API USIMeshComponent : public USkinnedMeshComponent
 {
 	GENERATED_BODY()
 	
@@ -56,32 +55,34 @@ protected:
 
 public:
 
-	/** The skeletal mesh used by this component. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SkinnedInstancing")
-	USkeletalMesh* SkeletalMesh;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SkinnedInstancing")
-	TWeakObjectPtr<USIAnimationComponent> AnimationComponent;
-
 	/** Object responsible for sending bone transforms, morph target state etc. to render thread. */
 	class FSIMeshObject* MeshObject;
 
-	UFUNCTION(BlueprintCallable, Category = "Components|SkinnedInstancing")
-	void SetAnimationComponent(USIAnimationComponent* _AnimationComponent);
+	/** The AnimSequence used by this component. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SkinnedInstancing")
+	TArray<UAnimSequence*> AnimSequences;
 
+	/** Base pose to use when retargeting */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SkinnedInstancing")
+	FName RetargetSource;
+
+	UFUNCTION(BlueprintCallable, Category = "Components|SkinnedInstancing")
+	UAnimSequence* GetSequence(int Id);
+
+	const class FSIAnimationData* GetAnimationData() const { return AnimationData; }
 private:
 	void UpdateMeshObejctDynamicData();
+	void CreateAnimationData();
+	void UpdateBoneData(TArray<FMatrix>& BoneMatrices, int SequenceOffset, UAnimSequence* AnimSequence, const FBoneContainer* BoneContainer);
 
 private:
 	TMap<int, FSIMeshInstanceData> PerInstanceSMData;
 	int InstanceIdIncrease;
-
+	class FSIAnimationData* AnimationData;
 public:
 	int32 AddInstance(const FTransform& Transform);
 
 	void RemoveInstance(int Id);
-	
-	UAnimSequence* GetSequence(int Id);
 
 	FSIMeshInstanceData* GetInstanceData(int Id);
 

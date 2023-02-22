@@ -1,9 +1,5 @@
 #include "/Engine/Public/Platform.ush"
 
-#ifndef SKINNED_INSTANCING_LIMIT_2BONE_INFLUENCES
-#define SKINNED_INSTANCING_LIMIT_2BONE_INFLUENCES 1 // default is 2 bones
-#endif
-
 #ifndef SKINNED_INSTANCING_DISABLE_ANIMATION_BLEND
 #define SKINNED_INSTANCING_DISABLE_ANIMATION_BLEND 0 // default is enable
 #endif
@@ -98,19 +94,12 @@ FMaterialPixelParameters GetMaterialPixelParameters(FVertexFactoryInterpolantsVS
 	return Result;
 }
 
-#define FBoneMatrix float4x4
+#define FBoneMatrix float3x4
 
 STRONG_TYPE Buffer<uint> BoneMap;
-STRONG_TYPE Buffer<float4> RefBasesInvMatrix;
 STRONG_TYPE Buffer<float4> BoneMatrices;
 STRONG_TYPE Buffer<float4> InstanceMatrices;
 STRONG_TYPE Buffer<uint> InstanceAnimations;
-
-FBoneMatrix GetRefBasesInvMatrixFromBuffer(int BoneId)
-{
-	int Offset = BoneId * 3;
-	return FBoneMatrix(RefBasesInvMatrix[Offset], RefBasesInvMatrix[Offset + 1], RefBasesInvMatrix[Offset + 2], float4(0, 0, 0, 1));
-}
 
 float4x4 GetInstanceMatrix(int InstanceId)
 {
@@ -124,7 +113,7 @@ float4x4 GetInstanceMatrix(int InstanceId)
 FBoneMatrix GetBoneMatrixFromBuffer(int _Offset)
 {
 	int Offset = _Offset * 3;
-	return FBoneMatrix(BoneMatrices[Offset], BoneMatrices[Offset + 1], BoneMatrices[Offset + 2], float4(0, 0, 0, 1));
+	return FBoneMatrix(BoneMatrices[Offset], BoneMatrices[Offset + 1], BoneMatrices[Offset + 2]);
 }
 
 FBoneMatrix GetBoneMatrixByInstanceAnimation(int InstanceId, int Layer, int BoneId)
@@ -136,16 +125,13 @@ FBoneMatrix GetBoneMatrixByInstanceAnimation(int InstanceId, int Layer, int Bone
 	float BlendWeight = InstanceAnimations[Index + 3] * 0.001f;
 #else
 	float BlendWeight = 1;
-#endif
-
-	FBoneMatrix InvMatrix = GetRefBasesInvMatrixFromBuffer(BoneId);
-	
-	FBoneMatrix Prev = mul(GetBoneMatrixFromBuffer(PrevFrame + BoneMap[BoneId]), InvMatrix);
+#endif	
+	FBoneMatrix Prev = GetBoneMatrixFromBuffer(PrevFrame + BoneMap[BoneId]);
 	
 #if !SKINNED_INSTANCING_DISABLE_FRAME_LERP
 	int NextFrame = InstanceAnimations[Index + 1];
 	float FrameLerp = InstanceAnimations[Index + 2] * 0.001f;
-	FBoneMatrix Next = mul(GetBoneMatrixFromBuffer(NextFrame + BoneMap[BoneId]), InvMatrix);
+	FBoneMatrix Next = GetBoneMatrixFromBuffer(NextFrame + BoneMap[BoneId]);
 	return lerp(Prev, Next, FrameLerp) * BlendWeight;
 #else
 	return Prev * BlendWeight;
@@ -222,12 +208,7 @@ FBoneMatrix CalcBoneMatrix( FVertexFactoryInput Input )
 #else
 	int InstanceId = 0;
 #endif
-	FBoneMatrix BoneMatrix = Input.BlendWeights.x * GetBoneMatrix(InstanceId, Input.BlendIndices.x);
-	BoneMatrix += Input.BlendWeights.y * GetBoneMatrix(InstanceId, Input.BlendIndices.y);
-#if !SKINNED_INSTANCING_LIMIT_2BONE_INFLUENCES
-	BoneMatrix += Input.BlendWeights.z * GetBoneMatrix(InstanceId, Input.BlendIndices.z);
-	BoneMatrix += Input.BlendWeights.w * GetBoneMatrix(InstanceId, Input.BlendIndices.w);
-#endif
+	FBoneMatrix BoneMatrix = GetBoneMatrix(InstanceId, Input.BlendIndices.x);
 	return BoneMatrix;
 }
 
@@ -238,7 +219,7 @@ float3 SkinPosition( FVertexFactoryInput Input, FVertexFactoryIntermediates Inte
 
 	// Note the use of mul(Matrix,Vector), bone matrices are stored transposed
 	// for tighter packing.
-	return mul( Intermediates.BlendMatrix, Position ).xyz;
+	return mul( Intermediates.BlendMatrix, Position );
 }
 
 /** transform the tangent basis vectors */
@@ -254,8 +235,8 @@ float3x3 SkinTangents( FVertexFactoryInput Input, FVertexFactoryIntermediates In
 
 	// Note the use of mul(Matrix,Vector), bone matrices are stored transposed
 	// for tighter packing.
-	TangentToLocal[0] = mul( Intermediates.BlendMatrix, float4(LocalTangentX, 0) ).xyz;
-	TangentToLocal[2] = mul( Intermediates.BlendMatrix, float4(LocalTangentZ.xyz, 0) ).xyz;
+	TangentToLocal[0] = mul( Intermediates.BlendMatrix, float4(LocalTangentX, 0) );
+	TangentToLocal[2] = mul( Intermediates.BlendMatrix, float4(LocalTangentZ.xyz, 0) );
 
 	// derive the new binormal by getting the cross product of the normal and tangent
 	// and flip vector based on sign of tangent basis determinant
@@ -325,16 +306,10 @@ void CalcTangentToWorld(FVertexFactoryInput Input, FVertexFactoryIntermediates I
 {
 	float3x3 LocalToWorld = InstanceGetLocalToWorld3x3(Intermediates);
 
-	// Remove scaling.
-	half3 InvScale = Primitive.InvNonUniformScaleAndDeterminantSign.xyz;
-	LocalToWorld[0] *= InvScale.x;
-	LocalToWorld[1] *= InvScale.y;
-	LocalToWorld[2] *= InvScale.z;
-
 	float3x3 TangentToWorld = mul(Intermediates.TangentToLocal, LocalToWorld);
 
 	TangentToWorld0 = TangentToWorld[0];
-	TangentToWorld2 = float4(TangentToWorld[2], Input.TangentZ.w * Primitive.InvNonUniformScaleAndDeterminantSign.w);
+	TangentToWorld2 = float4(TangentToWorld[2], Input.TangentZ.w);
 }
 
 float3 VertexFactoryGetWorldNormal(FVertexFactoryInput Input, FVertexFactoryIntermediates Intermediates)

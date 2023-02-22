@@ -12,12 +12,6 @@
 #pragma optimize( "", off )
 namespace
 {
-	static TAutoConsoleVariable<int32> CVarSkinnedInstancingLimit2BoneInfluences(
-		TEXT("r.SkinnedInstancing.Limit2BoneInfluences"),
-		1,
-		TEXT("Whether to use 2 bones influence instead of default 4 for GPU skinning. Cannot be changed at runtime."),
-		ECVF_ReadOnly);
-
 	static TAutoConsoleVariable<int32> CVarSkinnedInstancingDisableAnimationBlend(
 		TEXT("r.SkinnedInstancing.DisableAnimationBlend"),
 		0,
@@ -34,6 +28,7 @@ namespace
 	{
 		FStaticMeshVertexBuffers* StaticVertexBuffers = nullptr;
 		FSkinWeightVertexBuffer* SkinWeightVertexBuffer = nullptr;
+		FColorVertexBuffer*	ColorVertexBuffer = nullptr;
 		uint32 NumVertices = 0;
 	};
 
@@ -139,38 +134,6 @@ namespace
 					}
 
 					RHIUnlockVertexBuffer(BoneMap.VertexBufferRHI);
-				}
-
-				return true;
-			}
-
-			bool UpdateRefBasesInvMatrix(const TArray<FMatrix>& BoneMatrices)
-			{
-				uint32 BufferSize = BoneMatrices.Num() * 3 * sizeof(FVector4);
-
-				if (!RefBasesInvMatrix.IsValid())
-				{
-					FRHIResourceCreateInfo CreateInfo;
-					RefBasesInvMatrix.VertexBufferRHI = RHICreateVertexBuffer(BufferSize, (BUF_Dynamic | BUF_ShaderResource), CreateInfo);
-					RefBasesInvMatrix.VertexBufferSRV = RHICreateShaderResourceView(RefBasesInvMatrix.VertexBufferRHI, sizeof(FVector4), PF_A32B32G32R32F);
-				}
-
-				if (RefBasesInvMatrix.IsValid() && BoneMatrices.Num() > 0)
-				{
-					const int32 PreFetchStride = 2; // FPlatformMisc::Prefetch stride
-					FMatrix3x4* LockedBuffer = (FMatrix3x4*)RHILockVertexBuffer(RefBasesInvMatrix.VertexBufferRHI, 0, BufferSize, RLM_WriteOnly);
-
-					for (size_t i = 0; i < BoneMatrices.Num(); i++)
-					{
-						FPlatformMisc::Prefetch(BoneMatrices.GetData() + i + PreFetchStride);
-						FPlatformMisc::Prefetch(BoneMatrices.GetData() + i + PreFetchStride, PLATFORM_CACHE_LINE_SIZE);
-
-						FMatrix3x4& BoneMat = LockedBuffer[i];
-						const FMatrix& RefToLocal = BoneMatrices[i];
-						RefToLocal.To3x4MatrixTranspose((float*)BoneMat.M);
-					}
-
-					RHIUnlockVertexBuffer(RefBasesInvMatrix.VertexBufferRHI);
 				}
 
 				return true;
@@ -291,8 +254,18 @@ namespace
 			Data.BoneWeights = FVertexStreamComponent(
 				WeightDataVertexBuffer, WeightsOffset, Stride, VET_UByte4N);
 
-			Data.ColorComponentsSRV = nullptr;
-			Data.ColorIndexMask = 0;
+			// Color data may be NULL
+			if (VertexBuffers.ColorVertexBuffer != NULL &&
+				VertexBuffers.ColorVertexBuffer->IsInitialized())
+			{
+				// Color
+				VertexBuffers.ColorVertexBuffer->BindColorVertexBuffer(this, Data);
+			}
+			else
+			{
+				Data.ColorComponentsSRV = nullptr;
+				Data.ColorIndexMask = 0;
+			}
 		}
 	private:
 		uint32 NumVertices;
@@ -455,14 +428,13 @@ namespace
 	{
 		FVertexFactory::ModifyCompilationEnvironment(Parameters,OutEnvironment);
 
-		bool bLimit2BoneInfluences = (CVarSkinnedInstancingLimit2BoneInfluences.GetValueOnAnyThread() != 0);
-		OutEnvironment.SetDefine(TEXT("SKINNED_INSTANCING_LIMIT_2BONE_INFLUENCES"), (bLimit2BoneInfluences ? 1 : 0));
-
 		bool bDisableAnimationBlend = (CVarSkinnedInstancingDisableAnimationBlend.GetValueOnAnyThread() != 0);
 		OutEnvironment.SetDefine(TEXT("SKINNED_INSTANCING_DISABLE_ANIMATION_BLEND"), (bDisableAnimationBlend ? 1 : 0));
 
 		bool bDisableFrameLerp = (CVarSkinnedInstancingDisableFrameLerp.GetValueOnAnyThread() != 0);
 		OutEnvironment.SetDefine(TEXT("SKINNED_INSTANCING_DISABLE_FRAME_LERP"), (bDisableFrameLerp ? 1 : 0));
+
+		OutEnvironment.SetDefine(TEXT("GPU_SKINNED_MESH_FACTORY"), 1);
 	}
 
 }
@@ -503,6 +475,7 @@ private:
 	class USkeletalMesh* SkeletalMesh;
 	FSkeletalMeshRenderData* SkeletalMeshRenderData;
 	TArray<FSkeletalMeshObjectLOD> LODs;
+	TArray<FSkeletalMeshLODInfo> SkeletalMeshLODInfo;
 	FDynamicData* DynamicData;
 public:
 	TArray<TArray<FSIMeshInstanceData>> TempLODInstanceDatas;
@@ -517,6 +490,7 @@ struct FSIMeshObject::FSkeletalMeshObjectLOD
 
 		VertexBuffers.StaticVertexBuffers = &LODData.StaticVertexBuffers;
 		VertexBuffers.SkinWeightVertexBuffer = &LODData.SkinWeightVertexBuffer;
+		VertexBuffers.ColorVertexBuffer = &LODData.StaticVertexBuffers.ColorVertexBuffer;
 		VertexBuffers.NumVertices = LODData.GetNumVertices();
 
 		// init gpu skin factories
@@ -675,23 +649,7 @@ void FSIMeshObject::UpdateBoneData_RenderThread(const FSIAnimationData* Animatio
 			FGPUSkinVertexFactory* VertexFactory = GetSkinVertexFactory(LODIndex, SectionIndex);
 
 			VertexFactory->GetShaderData().UpdateBoneData(AnimationData);
-
-			TArray<FBoneIndexType> BoneMap;
-
-			for (int BoneIndex = 0; BoneIndex < Section.BoneMap.Num(); BoneIndex++)
-			{
-				FName BoneName = SkeletalMesh->RefSkeleton.GetBoneName(Section.BoneMap[BoneIndex]);
-				int NewBoneIndex = SkeletalMesh->Skeleton->GetReferenceSkeleton().FindBoneIndex(BoneName);
-				BoneMap.Add(NewBoneIndex);
-			}
-
-			VertexFactory->GetShaderData().UpdateBoneMap(BoneMap);
-
-			TArray<FMatrix> RefBasesInvMatrix;
-			for (int BoneIndex = 0; BoneIndex < Section.BoneMap.Num(); BoneIndex++)
-				RefBasesInvMatrix.Add(SkeletalMesh->RefBasesInvMatrix[Section.BoneMap[BoneIndex]]);
-
-			VertexFactory->GetShaderData().UpdateRefBasesInvMatrix(RefBasesInvMatrix);
+			VertexFactory->GetShaderData().UpdateBoneMap(Section.BoneMap);
 		}
 	}
 }
@@ -825,7 +783,7 @@ void FSIMeshSceneProxy::GetDynamicMeshElementsByLOD(FMeshElementCollector & Coll
 		FMeshBatchElement& BatchElement = Mesh.Elements[0];
 		BatchElement.FirstIndex = Section.BaseIndex;
 		BatchElement.IndexBuffer = LODData.MultiSizeIndexContainer.GetIndexBuffer();
-		BatchElement.MaxVertexIndex = LODData.GetNumVertices() - 1;
+		BatchElement.MaxVertexIndex = Section.GetVertexBufferIndex()+ LODData.GetNumVertices() - 1;
 		BatchElement.PrimitiveUniformBuffer = GetUniformBuffer();
 		BatchElement.NumPrimitives = Section.NumTriangles;
 		BatchElement.NumInstances = InstanceData.Num();
@@ -834,7 +792,7 @@ void FSIMeshSceneProxy::GetDynamicMeshElementsByLOD(FMeshElementCollector & Coll
 		Mesh.Type = PT_TriangleList;
 		Mesh.bSelectable = true;
 
-		BatchElement.MinVertexIndex = Section.BaseVertexIndex;
+		BatchElement.MinVertexIndex = Section.GetVertexBufferIndex();
 		Mesh.ReverseCulling = IsLocalToWorldDeterminantNegative();
 		Mesh.CastShadow = true;
 		Mesh.bCanApplyViewModeOverrides = true;
@@ -966,7 +924,7 @@ USIMeshComponent::USIMeshComponent(const FObjectInitializer& ObjectInitializer)
 {
 	bAutoActivate = true;
 	PrimaryComponentTick.bCanEverTick = true;
-	PrimaryComponentTick.TickGroup = TG_PrePhysics;
+	PrimaryComponentTick.TickGroup = TG_PostUpdateWork;
 
 	InstanceIdIncrease = 0;
 }
@@ -1034,9 +992,97 @@ void USIMeshComponent::OnUnregister()
 	Super::OnUnregister();
 }
 
+
+void USIMeshComponent::UpdateBoneData(TArray<FMatrix>& BoneMatrices, int SequenceOffset, UAnimSequence* AnimSequence, const FBoneContainer* BoneContainer)
+{
+	FCompactPose OutPose;
+	FBlendedCurve OutCurve;
+	FStackCustomAttributes AdditiveAttributes;
+	OutPose.SetBoneContainer(BoneContainer);
+	OutCurve.InitFrom(*BoneContainer);
+	FAnimationPoseData AnimationPoseData(OutPose, OutCurve, AdditiveAttributes);
+	int NumBones = BoneContainer->GetReferenceSkeleton().GetRawBoneNum();
+	int NumFrames = AnimSequence->GetNumberOfFrames();
+	float Interval = (NumFrames > 1) ? (AnimSequence->SequenceLength / (NumFrames - 1)) : MINIMUM_ANIMATION_LENGTH;
+
+	check(NumFrames > 0);
+
+	for (int FrameIndex = 0; FrameIndex < NumFrames; FrameIndex++)
+	{
+		float Time = FrameIndex * Interval;
+		AnimSequence->GetBonePose(AnimationPoseData, FAnimExtractContext(Time));
+
+		TArray<FTransform> ComponentSpaceTransforms;
+
+		ComponentSpaceTransforms.AddUninitialized(NumBones);
+
+		TArray<FTransform>& LocalTransform = (TArray<FTransform>&)AnimationPoseData.GetPose().GetBones();
+
+		FAnimationRuntime::ConvertPoseToMeshSpace(LocalTransform,ComponentSpaceTransforms,*BoneContainer);
+		for (int BoneIndex = 0; BoneIndex < NumBones; BoneIndex++)
+		{
+			int PoseDataOffset = SequenceOffset + NumBones * FrameIndex + BoneIndex;
+			BoneMatrices[PoseDataOffset] = BoneContainer->GetSkeletalMeshAsset()->RefBasesInvMatrix[BoneIndex] * ComponentSpaceTransforms[BoneIndex].ToMatrixWithScale();
+		}
+	}
+}
+
+
+void USIMeshComponent::CreateAnimationData()
+{
+	TArray<UAnimSequence*> AnimSequencesExist;
+	for (int i = 0; i < AnimSequences.Num(); i++)
+	{
+		if (AnimSequences[i])
+		{
+			AnimSequencesExist.Add(AnimSequences[i]);
+		}
+	}
+
+	if (AnimSequencesExist.Num() < 0)
+		return;
+
+	AnimationData = new FSIAnimationData();
+	int NumBones = SkeletalMesh->RefSkeleton.GetRawBoneNum();
+	TArray<FBoneIndexType> InRequiredBoneIndexArray;
+	for (int32 i = 0; i < SkeletalMesh->RefBasesInvMatrix.Num(); i++)
+	{
+		InRequiredBoneIndexArray.Add(i);
+	}
+	FBoneContainer BoneContainer(InRequiredBoneIndexArray, FCurveEvaluationOption(), *SkeletalMesh);
+	BoneContainer.SetUseRAWData(true);
+	int NumBoneMatrices = 0;
+	TArray<int> SequenceLengths;
+	SequenceLengths.AddZeroed(AnimSequencesExist.Num());
+	for (int i = 0; i < AnimSequencesExist.Num(); i++)
+	{
+		SequenceLengths[i] = AnimSequencesExist[i]->GetNumberOfFrames();
+		NumBoneMatrices += SequenceLengths[i] * NumBones;
+	}
+
+	AnimationData->Init(NumBones, SequenceLengths);
+
+	TArray<FMatrix>* BoneMatrices = new TArray<FMatrix>();
+	BoneMatrices->AddUninitialized(NumBoneMatrices);
+
+	int SequenceOffset = 0;
+	for (int i = 0; i < AnimSequencesExist.Num(); i++)
+	{
+		FName SavedRetargetSource = AnimSequencesExist[i]->RetargetSource;
+		if (RetargetSource.IsValid())
+			AnimSequencesExist[i]->RetargetSource = RetargetSource;
+		UpdateBoneData(*BoneMatrices, SequenceOffset, AnimSequencesExist[i], &BoneContainer);
+		SequenceOffset += AnimSequencesExist[i]->GetNumberOfFrames() * NumBones;
+		AnimSequencesExist[i]->RetargetSource = SavedRetargetSource;
+	}
+
+	AnimationData->Update(BoneMatrices);
+}
+
+
 void USIMeshComponent::CreateRenderState_Concurrent(FRegisterComponentContext* Context)
 {
-	if (SkeletalMesh && AnimationComponent.IsValid())
+	if (SkeletalMesh&& AnimSequences.Num() > 0 && AnimSequences[0])
 	{
 		ERHIFeatureLevel::Type SceneFeatureLevel = GetWorld()->FeatureLevel;
 
@@ -1047,26 +1093,26 @@ void USIMeshComponent::CreateRenderState_Concurrent(FRegisterComponentContext* C
 		if (FApp::CanEverRender() && ShouldComponentAddToScene())
 		{
 			MeshObject = ::new FSIMeshObject(SkeletalMesh, SceneFeatureLevel);
-
-			MeshObject->UpdateBoneData(AnimationComponent->GetAnimationData());
+			CreateAnimationData();
+			MeshObject->UpdateBoneData(GetAnimationData());
 		}
 	}
 
 	UpdateMeshObejctDynamicData();
 
-	Super::CreateRenderState_Concurrent(Context);
+	UMeshComponent::CreateRenderState_Concurrent(Context);
 }
 
 void USIMeshComponent::SendRenderDynamicData_Concurrent()
 {
-	Super::SendRenderDynamicData_Concurrent();
+	UMeshComponent::SendRenderDynamicData_Concurrent();
 
 	UpdateMeshObejctDynamicData();
 }
 
 void USIMeshComponent::DestroyRenderState_Concurrent()
 {
-	Super::DestroyRenderState_Concurrent();
+	UMeshComponent::DestroyRenderState_Concurrent();
 
 	if (MeshObject)
 	{
@@ -1079,13 +1125,15 @@ void USIMeshComponent::DestroyRenderState_Concurrent()
 		BeginCleanup(MeshObject);
 		MeshObject = nullptr;
 	}
-}
+	if (AnimationData)
+	{
+		AnimationData->Release();
 
-void USIMeshComponent::SetAnimationComponent(USIAnimationComponent * _AnimationComponent)
-{
-	AnimationComponent.Reset();
-	AnimationComponent = _AnimationComponent;
-	MarkRenderDynamicDataDirty();
+		// Begin a deferred delete of MeshObject.  BeginCleanup will call MeshObject->FinishDestroy after the above release resource
+		// commands execute in the rendering thread.
+		BeginCleanup(AnimationData);
+		AnimationData = nullptr;
+	}
 }
 
 void USIMeshComponent::UpdateMeshObejctDynamicData()
@@ -1124,12 +1172,9 @@ void USIMeshComponent::RemoveInstance(int Id)
 
 UAnimSequence * USIMeshComponent::GetSequence(int Id)
 {
-	if (AnimationComponent.IsValid())
-	{
-		return AnimationComponent->GetSequence(Id);
-	}
-
-	return nullptr;
+	if (Id >= AnimSequences.Num())
+		return nullptr;
+	return AnimSequences[Id];
 }
 
 FSIMeshInstanceData* USIMeshComponent::GetInstanceData(int Id)
@@ -1140,7 +1185,7 @@ FSIMeshInstanceData* USIMeshComponent::GetInstanceData(int Id)
 void USIMeshComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction * ThisTickFunction)
 {
 	// Tick ActorComponent first.
-	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+	UMeshComponent::TickComponent(DeltaTime, TickType, ThisTickFunction);
 	UpdateBounds();
 	MarkRenderTransformDirty();
 	MarkRenderDynamicDataDirty();
