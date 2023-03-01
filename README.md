@@ -1,5 +1,5 @@
 # SkinnedInstancing
-UE4 SkinnedInstancing 4.26 version 
+UE4 SkinnedInstancing 4.26 
 
 How to use
 
